@@ -80,8 +80,9 @@ export const BTW_SYSTEM_PROMPT = readFileSync(
 ).trimEnd();
 
 // ---------------------------------------------------------------------------
-// Storage — globalThis-keyed, survives module re-import on /new, /fork, /resume
-// Mirrors @tintinweb/pi-subagents/src/index.ts:413-422 pattern
+// Storage — globalThis-keyed, survives module re-import on /new, /fork, /resume.
+// Standard Node.js `globalThis + Symbol.for()` idiom for cross-import-graph
+// singleton state (used by OpenTelemetry, etc.); lost on process exit.
 // ---------------------------------------------------------------------------
 
 function getState(): BtwState {
