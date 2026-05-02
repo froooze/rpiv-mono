@@ -12,7 +12,7 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
 	return {
 		...actual,
 		completeSimple: vi.fn(),
-		supportsXhigh: vi.fn(() => false),
+		getSupportedThinkingLevels: vi.fn(() => ["off", "minimal", "low", "medium", "high"]),
 	};
 });
 
