@@ -1,13 +1,13 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./btw-ui.js", () => ({
 	showBtwOverlay: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@earendil-works/pi-ai")>();
 	return {
 		...actual,
 		completeSimple: vi.fn(),
@@ -15,7 +15,7 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
 	};
 });
 
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai";
 import { BTW_COMMAND_NAME, BTW_STATE_KEY, registerBtwCommand } from "./btw.js";
 import { showBtwOverlay } from "./btw-ui.js";
 

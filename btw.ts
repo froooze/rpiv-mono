@@ -15,14 +15,14 @@ import {
 	type Message,
 	type StopReason,
 	type UserMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import {
 	convertToLlm,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
 	type SessionEntry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { showBtwOverlay } from "./btw-ui.js";
 
 // ---------------------------------------------------------------------------

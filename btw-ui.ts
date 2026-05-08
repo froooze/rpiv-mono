@@ -24,8 +24,8 @@
  *   (f fork key deferred)
  */
 
-import type { ExtensionCommandContext, Theme } from "@mariozechner/pi-coding-agent";
-import type { OverlayOptions } from "@mariozechner/pi-tui";
+import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { OverlayOptions } from "@earendil-works/pi-tui";
 import {
 	type Component,
 	Key,
@@ -34,7 +34,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { type BtwTurn, userMessageText } from "./btw.js";
 
 const BTW_OVERLAY_OPTIONS: OverlayOptions = {

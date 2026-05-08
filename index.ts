@@ -7,7 +7,7 @@
  * /new, /fork, /reload, /resume; lost on Pi process exit.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerBtwCommand, registerInvalidationHooks, registerMessageEndSnapshot } from "./btw.js";
 
 export default function (pi: ExtensionAPI): void {

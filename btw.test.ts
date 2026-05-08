@@ -7,8 +7,8 @@ import {
 } from "@juicesharp/rpiv-test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@earendil-works/pi-ai")>();
 	return {
 		...actual,
 		completeSimple: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
 	};
 });
 
-import { type AssistantMessage, completeSimple, type UserMessage } from "@mariozechner/pi-ai";
+import { type AssistantMessage, completeSimple, type UserMessage } from "@earendil-works/pi-ai";
 import {
 	assistantMessageText,
 	BTW_STATE_KEY,
