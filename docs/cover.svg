@@ -2,69 +2,70 @@
   <title>rpiv-btw — Side questions without polluting the main conversation</title>
   <defs>
     <style>
-      .mono { font-family: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace; }
-      .ink { fill: #F4EFE6; }
-      .muted { fill: #7A7468; }
-      .dim { fill: #4A463F; }
-      .accent { fill: #FF7A3D; }
-      .mint { fill: #6FD0B8; }
+      .mono { font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .serif { font-family: 'Iowan Old Style', 'Hoefler Text', Charter, 'Source Serif Pro', Georgia, serif; }
+      .ink { fill: #ede6d3; }
+      .text-quiet { fill: #a8a29e; }
+      .text-distant { fill: #9c968d; }
+      .ochre { fill: #a8896c; }
+      .sage { fill: #8a9580; }
     </style>
-    <filter id="grain" x="0" y="0" width="100%" height="100%">
-      <feTurbulence type="fractalNoise" baseFrequency="1.4" numOctaves="2" seed="19"/>
-      <feColorMatrix values="0 0 0 0 0.96  0 0 0 0 0.94  0 0 0 0 0.88  0 0 0 0.04 0"/>
-    </filter>
-    <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
-      <stop offset="55%" stop-color="#070605" stop-opacity="0"/>
-      <stop offset="100%" stop-color="#000" stop-opacity="0.7"/>
+    <radialGradient id="wash-ochre" cx="25%" cy="10%" r="65%">
+      <stop offset="0%" stop-color="#a8896c" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#a8896c" stop-opacity="0"/>
     </radialGradient>
-    <filter id="winShadow" x="-10%" y="-10%" width="120%" height="130%">
-      <feDropShadow dx="0" dy="14" stdDeviation="22" flood-color="#000" flood-opacity="0.6"/>
-    </filter>
-    <clipPath id="wclip"><rect x="64" y="56" width="1152" height="688" rx="12"/></clipPath>
+    <radialGradient id="wash-sage" cx="85%" cy="90%" r="55%">
+      <stop offset="0%" stop-color="#8a9580" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#8a9580" stop-opacity="0"/>
+    </radialGradient>
+
   </defs>
 
-  <rect width="1280" height="800" fill="#070605"/>
-  <rect width="1280" height="800" filter="url(#grain)" opacity="0.45"/>
-  <rect width="1280" height="800" fill="url(#vignette)"/>
+  <rect width="1280" height="800" fill="#1c1a17"/>
+  <rect width="1280" height="800" fill="url(#wash-ochre)"/>
+  <rect width="1280" height="800" fill="url(#wash-sage)"/>
 
-  <rect x="64" y="56" width="1152" height="688" rx="12" fill="#0E0D0B" filter="url(#winShadow)"/>
-
-  <g clip-path="url(#wclip)">
-    <rect x="64" y="56" width="1152" height="44" fill="#16120E"/>
-    <line x1="64" y1="100" x2="1216" y2="100" stroke="#2A2620"/>
-    <circle cx="92"  cy="78" r="7" fill="#FF5F57"/>
-    <circle cx="120" cy="78" r="7" fill="#FFBD2E"/>
-    <circle cx="148" cy="78" r="7" fill="#28C840"/>
-    <text class="mono muted" x="640" y="84" font-size="14" letter-spacing="1.4" text-anchor="middle">~/rpiv-mono &#8212; pi &#8212; rpiv-btw</text>
-
-    <text class="mono mint" x="120" y="184" font-size="46" font-weight="700"># rpiv-btw</text>
-    <text class="mono muted" x="120" y="222" font-size="20" letter-spacing="0.5">Side question. Zero pollution.</text>
-
-    <g opacity="0.6">
-      <text class="mono" x="120" y="296" font-size="20"><tspan class="muted">user      &#8250;</tspan> <tspan class="muted">let&#8217;s migrate the websocket layer to SSE</tspan></text>
-      <text class="mono" x="120" y="328" font-size="20"><tspan class="muted">assistant &#8250;</tspan> <tspan class="muted">on it &#8212; reading current transport&#8230;</tspan></text>
-    </g>
-    <line x1="120" y1="362" x2="1160" y2="362" stroke="#2A2620" stroke-dasharray="2 6"/>
-
-    <text class="mono" x="120" y="408" font-size="22"><tspan class="mint" font-weight="700">&#10095;</tspan> <tspan class="accent" font-weight="700">/btw</tspan> <tspan class="ink">why did we switch from sockets to SSE?</tspan></text>
-    <text class="mono" x="120" y="464" font-size="20"><tspan class="muted">  &#8250; resilience: SSE survives proxies that drop ws,</tspan></text>
-    <text class="mono" x="120" y="494" font-size="20"><tspan class="muted">    and the team was tired of the ping-pong reconnect.</tspan></text>
-    <text class="mono" x="120" y="540" font-size="20"><tspan class="dim">  &#8250;</tspan> <tspan class="mint" font-weight="700">EPHEMERAL &#183; NEVER WRITTEN</tspan></text>
-
-    <text class="mono muted" x="120" y="618" font-size="14" letter-spacing="2.2">READ-ONLY BRANCH CLONE &#183; OWN AbortController &#183; tools: []</text>
-
-    <rect x="64" y="708" width="1152" height="36" fill="#16120E"/>
-    <line x1="64" y1="708" x2="1216" y2="708" stroke="#2A2620"/>
-    <text class="mono" font-size="14" y="731" letter-spacing="1">
-      <tspan x="92" class="accent" font-weight="700">&#9612; rpiv-btw</tspan>
-      <tspan dx="14" class="dim">&#9474;</tspan>
-      <tspan dx="14" class="mint">ephemeral</tspan>
-      <tspan dx="14" class="dim">&#9474;</tspan>
-      <tspan dx="14" class="muted">pi 0.9.4</tspan>
-      <tspan dx="14" class="dim">&#9474;</tspan>
-      <tspan dx="14" class="muted">npm:@juicesharp/rpiv-btw</tspan>
-    </text>
+  <g fill="none" stroke="#8a9580" stroke-linecap="round" opacity="0.45">
+    <path d="M1120 60 q36 -52 88 -60 q40 -5 68 14" stroke-width="1.1"/>
+    <path d="M1140 80 q28 -18 60 -14 q24 3 42 14" stroke-width="0.7" opacity="0.6"/>
+    <circle cx="1210" cy="32" r="2" opacity="0.5"/>
+    <circle cx="1160" cy="60" r="1.4" opacity="0.4"/>
   </g>
 
-  <rect x="64" y="56" width="1152" height="688" rx="12" fill="none" stroke="#3A352D" stroke-width="1"/>
+  <text class="mono text-distant" x="80" y="64" font-size="11" letter-spacing="0.18em">PI AGENT EXTENSION</text>
+
+  <text class="serif ink" x="80" y="152" font-size="80" font-weight="700" letter-spacing="-2.5">rpiv<tspan class="ochre">-</tspan>btw</text>
+  <text class="mono text-quiet" x="80" y="196" font-size="19" letter-spacing="0.2">Side question. Zero pollution.</text>
+
+  <line x1="80" y1="228" x2="1200" y2="228" stroke="#2e2b27" stroke-width="1"/>
+
+  <rect x="80" y="264" width="1120" height="440" rx="3" fill="#1c1a17" stroke="#3a3631" stroke-width="1"/>
+
+  <!-- Conversation thread -->
+  <g opacity="0.5">
+    <text class="mono" x="120" y="330" font-size="18"><tspan class="text-distant">user      &#8250;</tspan> <tspan class="text-distant">let&#8217;s migrate the websocket layer to SSE</tspan></text>
+    <text class="mono" x="120" y="360" font-size="18"><tspan class="text-distant">assistant &#8250;</tspan> <tspan class="text-distant">on it &#8212; reading current transport&#8230;</tspan></text>
+  </g>
+  <line x1="120" y1="392" x2="1160" y2="392" stroke="#2e2b27" stroke-dasharray="2 6"/>
+
+  <!-- /btw command -->
+  <text class="mono" x="120" y="440" font-size="20"><tspan class="sage" font-weight="700">&#10095;</tspan> <tspan class="ochre" font-weight="700">/btw</tspan> <tspan class="ink">why did we switch from sockets to SSE?</tspan></text>
+
+  <!-- Response -->
+  <text class="mono" x="120" y="492" font-size="18"><tspan class="text-distant">  &#8250; resilience: SSE survives proxies that drop ws,</tspan></text>
+  <text class="mono" x="120" y="520" font-size="18"><tspan class="text-distant">    and the team was tired of the ping-pong reconnect.</tspan></text>
+  <text class="mono" x="120" y="564" font-size="18"><tspan class="text-distant">  &#8250;</tspan> <tspan class="sage" font-weight="700">EPHEMERAL &#183; NEVER WRITTEN</tspan></text>
+
+  <!-- Caption -->
+  <text class="mono text-distant" x="120" y="634" font-size="12" letter-spacing="0.2em">READ-ONLY BRANCH CLONE &#183; OWN AbortController &#183; tools: []</text>
+
+  <line x1="80" y1="740" x2="1200" y2="740" stroke="#2e2b27" stroke-width="1"/>
+
+  <text class="mono text-distant" x="80" y="776" font-size="12" letter-spacing="0.12em">
+    <tspan class="ochre" font-weight="700">&#9612; rpiv-btw</tspan>
+    <tspan dx="12">&#9474;</tspan>
+    <tspan dx="12" class="sage">ephemeral</tspan>
+    <tspan dx="12">&#9474;</tspan>
+    <tspan dx="12">npm:@juicesharp/rpiv-btw</tspan>
+  </text>
 </svg>
