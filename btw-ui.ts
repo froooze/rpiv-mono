@@ -54,6 +54,7 @@ const FOOTER_SCROLL = "↑/↓ to scroll";
 const FOOTER_CLEAR = "x to clear history";
 const FOOTER_DISMISS = "Esc to dismiss";
 const FOOTER_SEP = " · ";
+const MSG_TRIMMED = "context trimmed to fit budget";
 
 type Mode = "pending" | "answer" | "error";
 
@@ -75,6 +76,7 @@ export class BtwOverlayController implements Component {
 	private answer = "";
 	private error = "";
 	private scrollOffset = 0;
+	private trimmed = false;
 	private history: BtwTurn[];
 
 	constructor(
@@ -98,6 +100,14 @@ export class BtwOverlayController implements Component {
 	setError(message: string): void {
 		this.mode = "error";
 		this.error = message;
+		this.tui.requestRender();
+	}
+
+	// Orthogonal to mode: a trimmed result is also a successful answer.
+	// Idempotent; a fresh controller is built per /btw command in showBtwOverlay,
+	// so there is no reset path.
+	setTrimmed(): void {
+		this.trimmed = true;
 		this.tui.requestRender();
 	}
 
@@ -139,8 +149,28 @@ export class BtwOverlayController implements Component {
 		const footer =
 			SIDE_PAD + truncateToWidth(this.theme.fg("dim", footerParts.join(FOOTER_SEP)), footerAvail, "…", false);
 
-		// Natural content: banner + blank + history + echo + blank + answer + blank + footer
-		const natural: string[] = [banner, "", ...historyLines, echoLine, "", ...answerLines, "", footer];
+		// Natural content: banner + blank + history + echo + blank + answer [+ trim notice] + blank + footer
+		const natural: string[] = [
+			banner,
+			"",
+			...historyLines,
+			echoLine,
+			"",
+			...answerLines,
+			...(this.trimmed
+				? [
+						ANSWER_PAD +
+							truncateToWidth(
+								this.theme.fg("warning", MSG_TRIMMED),
+								Math.max(1, width - ANSWER_PAD.length),
+								"…",
+								false,
+							),
+					]
+				: []),
+			"",
+			footer,
+		];
 
 		// Clip to terminal height if we overflow. Bottom-anchor keeps footer+answer visible;
 		// ↑/↓ scrolls the top (history) up into the clipped region.

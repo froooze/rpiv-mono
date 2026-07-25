@@ -109,6 +109,26 @@ describe("BtwOverlayController — setError", () => {
 	});
 });
 
+describe("BtwOverlayController — setTrimmed", () => {
+	it("appends exactly one notice line and triggers requestRender", () => {
+		const { ctl, tui } = makeController({ rows: 100 });
+		ctl.setAnswer("answer-body");
+		const beforeLines = ctl.render(80).length; // 7 (un-trimmed parity)
+		ctl.setTrimmed();
+		const afterLines = ctl.render(80);
+		expect(afterLines.length).toBe(beforeLines + 1); // 8 — exactly one more line
+		expect(afterLines.join("\n")).toContain("context trimmed to fit budget");
+		expect(tui.requestRender).toHaveBeenCalled();
+	});
+
+	it("is a no-op on the un-trimmed path (line count unchanged)", () => {
+		const { ctl } = makeController({ rows: 100 });
+		ctl.setAnswer("answer-body");
+		// setTrimmed never called — render stays at the un-trimmed line count
+		expect(ctl.render(80).length).toBe(7);
+	});
+});
+
 describe("BtwOverlayController — handleInput", () => {
 	it("Esc aborts the controller and resolves done()", () => {
 		const { ctl, controller, done } = makeController();

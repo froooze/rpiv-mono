@@ -31,6 +31,7 @@
   "files": [
     "index.ts",
     "btw.ts",
+    "btw-budget.ts",
     "btw-ui.ts",
     "pi-compat.ts",
     "prompts/",

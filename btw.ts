@@ -17,8 +17,9 @@ import {
 	type ExtensionContext,
 	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { capHistory, fitBranch } from "./btw-budget.js";
 import { showBtwOverlay } from "./btw-ui.js";
-import { loadCompleteSimple } from "./pi-compat.js";
+import { loadCompleteSimple, loadIsContextOverflow } from "./pi-compat.js";
 
 // ---------------------------------------------------------------------------
 // Constants — flat named consts, grouped by concern (advisor pattern, b9428e9)
@@ -48,6 +49,11 @@ const errNoApiKey = (label: string) => `/btw model (${label}) has no API key ava
 const errCallFailed = (err: string | undefined) => `/btw call failed: ${err ?? "unknown error"}`;
 const errCallThrew = (msg: string) => `/btw call threw: ${msg}`;
 
+// Budget (context-budgeting) constants.
+export const BTW_HISTORY_TOKEN_BUDGET = 8192; // cap /btw history (newest-suffix of BtwTurn[])
+export const BTW_CONTEXT_RESERVE = 16384; // matches host DEFAULT_COMPACTION_SETTINGS.reserveTokens
+export const BTW_NO_ANCHOR_SAFETY_FACTOR = 1.2; // no-anchor fallback overcount, applied HERE (host does not)
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -62,10 +68,10 @@ export interface BtwTurn {
 
 interface BtwState {
 	histories: Map<string, BtwTurn[]>;
-	snapshots: Map<string, { messages: Message[] }>;
+	snapshots: Map<string, { messages: Message[]; entries: SessionEntry[] }>;
 }
 
-function branchToMessages(branch: SessionEntry[]): Message[] {
+export function branchToMessages(branch: SessionEntry[]): Message[] {
 	const agentMessages = branch
 		.filter((e): e is SessionEntry & { type: "message" } => e.type === "message")
 		.map((e) => e.message);
@@ -123,11 +129,11 @@ export function clearSessionHistory(ctx: ExtensionContext): void {
 	getState().histories.set(getSessionFile(ctx), []);
 }
 
-function getSnapshot(ctx: ExtensionContext): { messages: Message[] } | undefined {
+function getSnapshot(ctx: ExtensionContext): { messages: Message[]; entries: SessionEntry[] } | undefined {
 	return getState().snapshots.get(getSessionFile(ctx));
 }
 
-function setSnapshot(ctx: ExtensionContext, snapshot: { messages: Message[] }): void {
+function setSnapshot(ctx: ExtensionContext, snapshot: { messages: Message[]; entries: SessionEntry[] }): void {
 	getState().snapshots.set(getSessionFile(ctx), snapshot);
 }
 
@@ -172,25 +178,66 @@ function getCrossSessionHint(): string {
 // ---------------------------------------------------------------------------
 
 export type BtwExecResult =
-	| { ok: true; answer: string; userMessage: UserMessage; assistantMessage: AssistantMessage; stopReason: StopReason }
+	| {
+			ok: true;
+			answer: string;
+			userMessage: UserMessage;
+			assistantMessage: AssistantMessage;
+			stopReason: StopReason;
+			trimmed?: boolean;
+	  }
 	| { ok: false; error: string; stopReason?: StopReason }
 	| { ok: false; aborted: true; stopReason: StopReason };
 
-function readBranchMessages(ctx: ExtensionContext): Message[] {
+function readBranchSnapshot(ctx: ExtensionContext): { messages: Message[]; entries: SessionEntry[] } {
 	const cached = getSnapshot(ctx);
-	if (cached) return cached.messages;
-	// Cold start (no message_end fired yet) — fall back to live read
+	if (cached) return cached;
+	// Cold start (no message_end fired yet) — fall back to a single live read.
 	const branch = ctx.sessionManager.getBranch() as SessionEntry[];
-	return branchToMessages(branch);
+	return { messages: branchToMessages(branch), entries: branch };
 }
 
-function buildBtwMessages(ctx: ExtensionContext, userMessage: UserMessage): Message[] {
-	const branchMessages = readBranchMessages(ctx);
-	const history = getSessionHistory(ctx);
-	// Reusing stored real UserMessage/AssistantMessage object references across calls
-	// preserves byte-identical prompt prefix (cache parity).
-	const historyMessages: Message[] = history.flatMap((h) => [h.userMessage, h.assistantMessage]);
-	return [...branchMessages, ...historyMessages, userMessage];
+export interface BtwBuiltContext {
+	messages: Message[];
+	systemPrompt: string;
+	droppedTurns: number;
+	branchWasTrimmed: boolean;
+	stubbed: boolean;
+	keepBudget: number; // halved by the overflow-retry caller to tighten the branch budget
+}
+
+export function buildBtwMessages(
+	ctx: ExtensionContext,
+	userMessage: UserMessage,
+	keepBudget?: number,
+): BtwBuiltContext {
+	// ctx.model is non-null here — executeBtw returns early on !model before calling.
+	const model = ctx.model!;
+	const capped = capHistory(getSessionHistory(ctx));
+	const { messages, entries } = readBranchSnapshot(ctx);
+	const systemPrompt = buildSystemPrompt();
+	const fit = fitBranch({
+		entries,
+		messages,
+		model,
+		systemPrompt,
+		question: userMessage,
+		admittedEstimate: capped.estimate,
+		keepBudget,
+	});
+	const assembled: Message[] = [
+		...fit.messages,
+		...capped.admitted.flatMap((t) => [t.userMessage, t.assistantMessage]),
+		userMessage,
+	];
+	return {
+		messages: assembled,
+		systemPrompt,
+		droppedTurns: capped.droppedTurns,
+		branchWasTrimmed: fit.branchWasTrimmed,
+		stubbed: fit.stubbed,
+		keepBudget: fit.keepBudget,
+	};
 }
 
 function buildSystemPrompt(): string {
@@ -221,14 +268,18 @@ export async function executeBtw(
 		content: [{ type: "text", text: question }],
 		timestamp: Date.now(),
 	};
-	const messages = buildBtwMessages(ctx, userMessage);
-	const systemPrompt = buildSystemPrompt();
+	// `let` because the overflow retry reassigns `built` with a halved budget;
+	// buildBtwMessages returns BtwBuiltContext { messages, systemPrompt,
+	// droppedTurns, branchWasTrimmed, stubbed, keepBudget }.
+	let built = buildBtwMessages(ctx, userMessage);
 
 	try {
 		const completeSimple = await loadCompleteSimple();
-		const response = await completeSimple(
+		const overflowFn = await loadIsContextOverflow();
+		let retried = false;
+		let response = await completeSimple(
 			model,
-			{ systemPrompt, messages, tools: [] },
+			{ systemPrompt: built.systemPrompt, messages: built.messages, tools: [] },
 			{
 				apiKey: auth.apiKey,
 				headers: auth.headers,
@@ -238,6 +289,29 @@ export async function executeBtw(
 
 		if (response.stopReason === "aborted") {
 			return { ok: false, aborted: true, stopReason: response.stopReason };
+		}
+		// Overflow gate — exactly one retry. On the first response the host flags
+		// as context overflow (any stopReason), rebuild the branch context with a
+		// halved keepBudget and re-call once. A flag bounds it to one retry; the
+		// recall's throw and the loader's rethrow both land in the surrounding
+		// catch. /btw's fresh side call retries all three overflow stopReasons
+		// (error/stop/length), a deliberate divergence from the host's
+		// stopReason-based willRetry.
+		if (overflowFn && !retried && overflowFn(response, model.contextWindow)) {
+			retried = true;
+			built = buildBtwMessages(ctx, userMessage, Math.floor(built.keepBudget / 2));
+			response = await completeSimple(
+				model,
+				{ systemPrompt: built.systemPrompt, messages: built.messages, tools: [] },
+				{
+					apiKey: auth.apiKey,
+					headers: auth.headers,
+					signal: controller.signal,
+				},
+			);
+			if (response.stopReason === "aborted") {
+				return { ok: false, aborted: true, stopReason: response.stopReason };
+			}
 		}
 		if (response.stopReason === "error") {
 			return {
@@ -258,6 +332,7 @@ export async function executeBtw(
 			userMessage,
 			assistantMessage: response,
 			stopReason: response.stopReason,
+			trimmed: built.droppedTurns > 0 || built.branchWasTrimmed || built.stubbed,
 		};
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
@@ -278,7 +353,7 @@ export function registerMessageEndSnapshot(pi: ExtensionAPI): void {
 		if (msg.role !== "assistant") return;
 		if ((msg as AssistantMessage).stopReason === "toolUse") return;
 		const branch = ctx.sessionManager.getBranch() as SessionEntry[];
-		setSnapshot(ctx, { messages: branchToMessages(branch) });
+		setSnapshot(ctx, { messages: branchToMessages(branch), entries: branch });
 	});
 }
 
@@ -344,6 +419,7 @@ async function handleBtwCommand(_pi: ExtensionAPI, args: string, ctx: ExtensionC
 
 	if (result.ok) {
 		overlayCtl.setAnswer(result.answer);
+		if (result.trimmed) overlayCtl.setTrimmed();
 		pushSessionTurn(ctx, {
 			userMessage: result.userMessage,
 			assistantMessage: result.assistantMessage,

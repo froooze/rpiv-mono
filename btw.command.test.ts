@@ -29,10 +29,14 @@ import { showBtwOverlay } from "./btw-ui.js";
 
 const model = { provider: "a", id: "m" } as unknown as Model<Api>;
 
-type OverlayCtl = { setAnswer: ReturnType<typeof vi.fn>; setError: ReturnType<typeof vi.fn> };
+type OverlayCtl = {
+	setAnswer: ReturnType<typeof vi.fn>;
+	setError: ReturnType<typeof vi.fn>;
+	setTrimmed: ReturnType<typeof vi.fn>;
+};
 
 function stubOverlay(): OverlayCtl {
-	const ctl: OverlayCtl = { setAnswer: vi.fn(), setError: vi.fn() };
+	const ctl: OverlayCtl = { setAnswer: vi.fn(), setError: vi.fn(), setTrimmed: vi.fn() };
 	vi.mocked(showBtwOverlay).mockReturnValueOnce({
 		overlayPromise: Promise.resolve(),
 		controllerReady: Promise.resolve(ctl as never),
@@ -103,6 +107,7 @@ describe("/btw — happy path", () => {
 		expect(params.history).toEqual([]);
 		expect(ctl.setAnswer).toHaveBeenCalledWith("42");
 		expect(ctl.setError).not.toHaveBeenCalled();
+		expect(ctl.setTrimmed).not.toHaveBeenCalled();
 	});
 });
 

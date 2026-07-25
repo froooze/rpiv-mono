@@ -24,6 +24,16 @@ vi.mock("@earendil-works/pi-ai/compat", async (importOriginal) => {
 	};
 });
 
+// Mock the loader so the overflow gate is controllable independently of the
+// real isContextOverflow regex behavior. loadCompleteSimple is routed to the
+// shared completeSimple spy (above) so existing mockResolvedValueOnce chains
+// keep working; loadIsContextOverflow defaults to undefined (legacy host, no
+// retry) and is overridden per-test in the overflow-retry suite.
+vi.mock("./pi-compat.js", () => ({
+	loadCompleteSimple: vi.fn(),
+	loadIsContextOverflow: vi.fn(),
+}));
+
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
@@ -39,6 +49,7 @@ import {
 	registerMessageEndSnapshot,
 	userMessageText,
 } from "./btw.js";
+import { loadCompleteSimple, loadIsContextOverflow } from "./pi-compat.js";
 
 // Pins the substring `isStaleCtxError` matches in pi-core's invalidated-proxy error.
 const STALE_CTX_MESSAGE = "This extension ctx is stale after session replacement or reload.";
@@ -59,6 +70,14 @@ function makeCompletionResponse(input: {
 
 beforeEach(() => {
 	vi.mocked(completeSimple).mockReset();
+	vi.mocked(loadCompleteSimple).mockReset();
+	vi.mocked(loadIsContextOverflow).mockReset();
+	// Route the loader to the shared completeSimple spy so existing
+	// mockResolvedValueOnce(makeCompletionResponse(...)) chains keep working.
+	vi.mocked(loadCompleteSimple).mockResolvedValue(completeSimple as never);
+	// Default: legacy host (isContextOverflow absent) → no retry. Per-test
+	// overrides set a real overflowFn to exercise the gate.
+	vi.mocked(loadIsContextOverflow).mockResolvedValue(undefined);
 	delete (globalThis as Record<symbol, unknown>)[BTW_STATE_KEY];
 });
 
@@ -285,6 +304,114 @@ describe("executeBtw — branch threading", () => {
 			return makeCompletionResponse({ text: "ok" });
 		}) as never);
 		await executeBtw("q", ctx, new AbortController());
+	});
+});
+
+describe("executeBtw — overflow retry", () => {
+	it("retries exactly once on first-call overflow, then succeeds with the retry's answer", async () => {
+		const ctx = createMockCtx();
+		ctx.model = { provider: "a", id: "m", contextWindow: 8192 } as never;
+		const overflowFn = vi.fn(() => true);
+		vi.mocked(loadIsContextOverflow).mockResolvedValue(overflowFn as never);
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(
+				makeCompletionResponse({ stopReason: "error", errorMessage: "prompt is too long" }) as never,
+			)
+			.mockResolvedValueOnce(makeCompletionResponse({ text: "retry answer" }) as never);
+
+		const r = await executeBtw("q", ctx, new AbortController());
+
+		expect(r.ok).toBe(true);
+		if (!r.ok) throw new Error("unexpected");
+		expect(r.answer).toBe("retry answer");
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+		// The retry rebuilt the context: the second call received a freshly built
+		// messages array (buildBtwMessages returns a new spread each call).
+		const calls = vi.mocked(completeSimple).mock.calls as Array<[unknown, { messages: unknown[] }, unknown]>;
+		expect(calls[1][1].messages).not.toBe(calls[0][1].messages);
+	});
+
+	it("does not retry when the first call is aborted (aborted arm, single call)", async () => {
+		const ctx = createMockCtx();
+		ctx.model = { provider: "a", id: "m", contextWindow: 8192 } as never;
+		const overflowFn = vi.fn(() => true);
+		vi.mocked(loadIsContextOverflow).mockResolvedValue(overflowFn as never);
+		vi.mocked(completeSimple).mockResolvedValueOnce(makeCompletionResponse({ stopReason: "aborted" }) as never);
+
+		const r = await executeBtw("q", ctx, new AbortController());
+
+		expect(r).toMatchObject({ ok: false, aborted: true });
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(overflowFn).not.toHaveBeenCalled();
+	});
+
+	it("returns the aborted arm when the retry itself is aborted", async () => {
+		const ctx = createMockCtx();
+		ctx.model = { provider: "a", id: "m", contextWindow: 8192 } as never;
+		vi.mocked(loadIsContextOverflow).mockResolvedValue(vi.fn(() => true) as never);
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(
+				makeCompletionResponse({ stopReason: "error", errorMessage: "prompt is too long" }) as never,
+			)
+			.mockResolvedValueOnce(makeCompletionResponse({ stopReason: "aborted" }) as never);
+
+		const r = await executeBtw("q", ctx, new AbortController());
+
+		expect(r).toMatchObject({ ok: false, aborted: true });
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+	});
+
+	it("falls through to the error arm when the retry also overflows (no third call)", async () => {
+		const ctx = createMockCtx();
+		ctx.model = { provider: "a", id: "m", contextWindow: 8192 } as never;
+		vi.mocked(loadIsContextOverflow).mockResolvedValue(vi.fn(() => true) as never);
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(
+				makeCompletionResponse({ stopReason: "error", errorMessage: "prompt is too long" }) as never,
+			)
+			.mockResolvedValueOnce(
+				makeCompletionResponse({ stopReason: "error", errorMessage: "prompt is too long" }) as never,
+			);
+
+		const r = await executeBtw("q", ctx, new AbortController());
+
+		expect(r.ok).toBe(false);
+		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.error).toContain("call failed");
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not retry on a non-overflow error (overflowFn returns false)", async () => {
+		const ctx = createMockCtx();
+		ctx.model = { provider: "a", id: "m", contextWindow: 8192 } as never;
+		vi.mocked(loadIsContextOverflow).mockResolvedValue(vi.fn(() => false) as never);
+		vi.mocked(completeSimple).mockResolvedValueOnce(
+			makeCompletionResponse({ stopReason: "error", errorMessage: "remote 500" }) as never,
+		);
+
+		const r = await executeBtw("q", ctx, new AbortController());
+
+		expect(r.ok).toBe(false);
+		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.error).toContain("remote 500");
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not retry on a legacy host where isContextOverflow is absent (undefined)", async () => {
+		const ctx = createMockCtx();
+		ctx.model = { provider: "a", id: "m", contextWindow: 8192 } as never;
+		vi.mocked(loadIsContextOverflow).mockResolvedValue(undefined);
+		// Even an overflow-looking error does not trigger a retry.
+		vi.mocked(completeSimple).mockResolvedValueOnce(
+			makeCompletionResponse({ stopReason: "error", errorMessage: "prompt is too long" }) as never,
+		);
+
+		const r = await executeBtw("q", ctx, new AbortController());
+
+		expect(r.ok).toBe(false);
+		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.error).toContain("call failed");
+		expect(completeSimple).toHaveBeenCalledTimes(1);
 	});
 });
 

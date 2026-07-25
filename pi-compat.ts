@@ -17,6 +17,7 @@
  */
 
 type CompleteSimpleFn = typeof import("@earendil-works/pi-ai/compat").completeSimple;
+type IsContextOverflowFn = typeof import("@earendil-works/pi-ai/compat").isContextOverflow;
 
 /**
  * Error codes meaning "the /compat entrypoint is not resolvable on this host":
@@ -61,4 +62,34 @@ export async function loadCompleteSimple(): Promise<CompleteSimpleFn> {
 		);
 	}
 	return completeSimple;
+}
+
+/**
+ * Host-version-tolerant loader for pi-ai's `isContextOverflow` — the overflow
+ * detector that gates the /btw single-retry.
+ *
+ * `isContextOverflow` is re-exported from BOTH the `/compat` entrypoint and the
+ * package root (defined in pi-ai's `utils/overflow`), so the resolution path
+ * mirrors `loadCompleteSimple`: try `/compat`, fall back to the root only on a
+ * module-resolution failure, and rethrow a real `/compat` init failure so it is
+ * not masked by the fallback. Unlike `completeSimple`, the export's ABSENCE is
+ * an expected host state (older pi-ai, or a host that surfaces it from neither
+ * entrypoint), not an unsupported-host error: per the Option-3 refinement the
+ * missing-export case returns `undefined` so the caller degrades gracefully
+ * (skips the retry) instead of crashing. A non-resolution `/compat` failure
+ * still rethrows.
+ */
+export async function loadIsContextOverflow(): Promise<IsContextOverflowFn | undefined> {
+	let mod: { isContextOverflow?: IsContextOverflowFn };
+	try {
+		mod = (await import("@earendil-works/pi-ai/compat")) as { isContextOverflow?: IsContextOverflowFn };
+	} catch (err) {
+		if (!isModuleNotFound(err)) throw err; // a real /compat failure must surface, not mask as a fallback
+		mod = (await import("@earendil-works/pi-ai")) as { isContextOverflow?: IsContextOverflowFn };
+	}
+	const isContextOverflow = mod.isContextOverflow;
+	if (typeof isContextOverflow !== "function") {
+		return undefined; // expected absence on a host lacking the export — degrade, don't crash
+	}
+	return isContextOverflow;
 }

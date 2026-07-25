@@ -7,6 +7,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Context budgeting for `/btw` side calls: the `/btw` history is capped to a token budget (`BTW_HISTORY_TOKEN_BUDGET`), the conversation branch is trimmed/stubbed to fit `contextWindow − maxTokens − BTW_CONTEXT_RESERVE`, a single overflow retry halves the branch budget, and a trim notice is shown in the overlay when the context was trimmed to fit.
+
 ## [2.1.0] - 2026-07-23
 
 ### Changed
