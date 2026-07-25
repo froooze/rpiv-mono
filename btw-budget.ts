@@ -19,7 +19,16 @@ import {
 	type SessionEntry,
 	sessionEntryToContextMessages,
 } from "@earendil-works/pi-coding-agent";
-import { BTW_CONTEXT_RESERVE, BTW_HISTORY_TOKEN_BUDGET, BTW_NO_ANCHOR_SAFETY_FACTOR, type BtwTurn } from "./btw.js";
+import type { BtwTurn } from "./btw.js";
+
+// ---------------------------------------------------------------------------
+// Budget constants — the engine's tuning surface. Defined in this leaf module so
+// the btw.ts ↔ btw-budget.ts dependency is type-only at runtime (btw.ts re-exports
+// them for the package's public surface).
+// ---------------------------------------------------------------------------
+export const BTW_HISTORY_TOKEN_BUDGET = 8192; // cap /btw history (newest-suffix of BtwTurn[])
+export const BTW_CONTEXT_RESERVE = 16384; // matches host DEFAULT_COMPACTION_SETTINGS.reserveTokens
+export const BTW_NO_ANCHOR_SAFETY_FACTOR = 1.2; // no-anchor fallback overcount, applied HERE (host does not)
 
 /**
  * Result of {@link capHistory}: the newest suffix of `/btw` turns admitted into
@@ -146,12 +155,33 @@ function estimateMessagesTokens(messages: Message[]): number {
 }
 
 /** Branch-usage estimate. Anchor = getLastAssistantUsage → calculateContextTokens
- *  (safe overcount: includes the main agent's system/tools that /btw omits).
+ *  (safe overcount: includes the main agent's system/tools that /btw omits) PLUS
+ *  estimateTokens over every context message from entries AFTER the anchor — turns the
+ *  provider has not metered (the user's latest turn, tool traffic behind an
+ *  aborted/error assistant) still occupy the window and must count toward it.
  *  No anchor → sum(estimateTokens) × BTW_NO_ANCHOR_SAFETY_FACTOR (host applies no factor;
  *  btw-budget applies 1.2 itself). */
 function estimateBranchTokens(entries: SessionEntry[]): number {
 	const usage = getLastAssistantUsage(entries);
-	if (usage) return calculateContextTokens(usage);
+	if (usage) {
+		// Locate the anchor entry by Usage-object identity: getLastAssistantUsage returns
+		// the stored reference, so identity finds the anchor without re-implementing the
+		// host's validity predicate (skip aborted/error/all-zero). Walk newest-first,
+		// summing estimates until the anchor — those are exactly the post-anchor entries.
+		let tail = 0;
+		let anchorFound = false;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const e = entries[i];
+			if (e.type === "message" && e.message.role === "assistant" && e.message.usage === usage) {
+				anchorFound = true;
+				break;
+			}
+			for (const m of sessionEntryToContextMessages(e)) tail += estimateTokens(m);
+		}
+		// Identity miss (a host returning a derived Usage object) would have made `tail`
+		// span the whole branch and double-count the anchored prefix — drop it instead.
+		return calculateContextTokens(usage) + (anchorFound ? tail : 0);
+	}
 	// No-anchor fallback: sum estimateTokens over every context-visible AgentMessage the
 	// entries produce (estimateTokens accepts AgentMessage, so no cast is needed), × 1.2.
 	let sum = 0;
@@ -338,10 +368,13 @@ export function fitBranch(input: FitBranchInput): FitBranchResult {
 	}
 
 	// --- No-cut-possible fallback: no valid cut or no turn-start → stub the full
-	//     cached messages (branchWasTrimmed FALSE — findCutPoint found nothing to cut). ---
+	//     cached messages (branchWasTrimmed FALSE — findCutPoint found nothing to cut).
+	//     When stubbing changed nothing (anchor-metered usage over budget but the raw
+	//     estimates already fit), return the ORIGINAL cached array — best effort, and
+	//     the reference-parity guarantee holds. ---
 	const stubbed = stubToFit(messages, branchKeepBudget);
 	return {
-		messages: stubbed.messages,
+		messages: stubbed.stubbed ? stubbed.messages : messages,
 		branchWasTrimmed: false,
 		stubbed: stubbed.stubbed,
 		keepBudget: branchKeepBudget,

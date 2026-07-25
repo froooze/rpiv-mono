@@ -356,6 +356,62 @@ describe("fitBranch — FR2 anchor accounting vs no-anchor fallback", () => {
 	});
 });
 
+describe("fitBranch — FR2 post-anchor tail accounting", () => {
+	// Window budget ≈ 1000 − sys(4) − Q(2) tokens in all three tests: anchor usage 400
+	// alone fits; anchor + a ~1200-token unmetered tail must not. The tail exceeds the
+	// budget under BOTH metrics (anchor accounting AND raw chars/4) so the trim/stub
+	// machinery — which cuts by raw estimates — visibly engages.
+	const anchoredFit = (entries: SessionEntry[]) => {
+		const cached = branchToMessages(entries);
+		const model = makeModel();
+		const available = model.contextWindow - model.maxTokens - BTW_CONTEXT_RESERVE;
+		return {
+			cached,
+			fit: fitBranch({
+				entries,
+				messages: cached,
+				model,
+				systemPrompt: SYS,
+				question: Q,
+				admittedEstimate: available - 1000,
+			}),
+		};
+	};
+
+	it("counts entries after the usage anchor (anchor alone fits; anchor + tail trims)", () => {
+		const { cached, fit } = anchoredFit(
+			buildSessionEntries([
+				makeUserMessage("u1"),
+				makeAssistantWithUsage("a1", 400),
+				makeUserMessage(toks(1200)), // unmetered post-anchor turn
+			]),
+		);
+		expect(fit.branchWasTrimmed || fit.stubbed).toBe(true);
+		expect(fit.messages).not.toBe(cached);
+	});
+
+	it("control: an anchor covering the whole branch still fast-paths", () => {
+		const { cached, fit } = anchoredFit(
+			buildSessionEntries([makeUserMessage("u1"), makeAssistantWithUsage("a1", 400)]),
+		);
+		expect(fit.branchWasTrimmed).toBe(false);
+		expect(fit.stubbed).toBe(false);
+		expect(fit.messages).toBe(cached);
+	});
+
+	it("tail spans every unmetered entry behind the anchor, not just the newest", () => {
+		const { fit } = anchoredFit(
+			buildSessionEntries([
+				makeUserMessage("u1"),
+				makeAssistantWithUsage("a1", 400),
+				makeUserMessage(toks(300)),
+				makeAssistantMessage({ text: toks(1000) }), // no usage → not an anchor, still occupies the window
+			]),
+		);
+		expect(fit.branchWasTrimmed || fit.stubbed).toBe(true);
+	});
+});
+
 describe("fitBranch — FR5 forward-scan trim", () => {
 	it("kept suffix opens on a turn-start (never an orphaned assistant/toolResult)", () => {
 		// Two turns; force a trim that drops the first turn. Second turn opens on its user msg.

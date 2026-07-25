@@ -40,6 +40,8 @@ import {
 	assistantMessageText,
 	BTW_STATE_KEY,
 	BTW_SYSTEM_PROMPT,
+	type BtwTurn,
+	buildBtwMessages,
 	CROSS_SESSION_HINT_LIMIT,
 	clearSessionHistory,
 	executeBtw,
@@ -304,6 +306,62 @@ describe("executeBtw — branch threading", () => {
 			return makeCompletionResponse({ text: "ok" });
 		}) as never);
 		await executeBtw("q", ctx, new AbortController());
+	});
+});
+
+describe("buildBtwMessages — history cap engagement", () => {
+	// createMockCtx's session file key — matches the clearSessionHistory test above.
+	const SESSION_FILE = "/tmp/test-session.jsonl";
+	const histToks = (n: number): string => "x".repeat(n * 4);
+	// Turn of ~`cost` estimated tokens (tag adds a negligible handful of chars) whose
+	// text carries `tag` so presence/absence is assertable on the assembled messages.
+	const histTurn = (cost: number, tag: string): BtwTurn => ({
+		userMessage: makeUserMessage(`${tag} ${histToks(cost)}`),
+		assistantMessage: makeAssistantMessage({}),
+	});
+	// Three ~3000-token turns ≈ 9000 total: over the 8192 cap by exactly one oldest turn.
+	const threeTurns = (): BtwTurn[] => [histTurn(3000, "h-old"), histTurn(3000, "h-mid"), histTurn(3000, "h-new")];
+	function seedHistory(turns: BtwTurn[]): void {
+		(globalThis as Record<symbol, unknown>)[BTW_STATE_KEY] = {
+			histories: new Map([[SESSION_FILE, turns]]),
+			snapshots: new Map(),
+		};
+	}
+
+	it("keeps the FULL history past the 8192 cap when the whole request fits the window", () => {
+		seedHistory(threeTurns());
+		const ctx = createMockCtx({ branch: buildSessionEntries([makeUserMessage("branch-turn")]) });
+		ctx.model = { provider: "a", id: "m", contextWindow: 200000, maxTokens: 8192 } as never;
+		const built = buildBtwMessages(ctx, makeUserMessage("q"));
+		expect(built.droppedTurns).toBe(0);
+		expect(JSON.stringify(built.messages)).toContain("h-old");
+		// 1 branch message + 3×2 history messages + the question — nothing capped away.
+		expect(built.messages).toHaveLength(8);
+	});
+
+	it("caps history (drops the oldest turn) once the full-history request is over budget", () => {
+		seedHistory(threeTurns());
+		// Branch ≈ 4800 estimated tokens (1.2× no-anchor factor). available = 30000 − 1000 −
+		// 16384 = 12616: full history (~9000) leaves ~3400 — branch cannot fit; capped
+		// history (~6000) frees ~6400 — branch fits without trimming.
+		const ctx = createMockCtx({ branch: buildSessionEntries([makeUserMessage(histToks(4000))]) });
+		ctx.model = { provider: "a", id: "m", contextWindow: 30000, maxTokens: 1000 } as never;
+		const built = buildBtwMessages(ctx, makeUserMessage("q"));
+		expect(built.droppedTurns).toBe(1);
+		const text = JSON.stringify(built.messages);
+		expect(text).not.toContain("h-old");
+		expect(text).toContain("h-mid");
+		expect(text).toContain("h-new");
+	});
+
+	it("overflow-retry path (explicit keepBudget) always uses the capped history", () => {
+		seedHistory(threeTurns());
+		const ctx = createMockCtx({ branch: buildSessionEntries([makeUserMessage("branch-turn")]) });
+		ctx.model = { provider: "a", id: "m", contextWindow: 200000, maxTokens: 8192 } as never;
+		// Same window as the parity test above — only the explicit keepBudget differs.
+		const built = buildBtwMessages(ctx, makeUserMessage("q"), 50);
+		expect(built.droppedTurns).toBe(1);
+		expect(built.keepBudget).toBe(50);
 	});
 });
 

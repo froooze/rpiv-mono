@@ -17,7 +17,7 @@ import {
 	type ExtensionContext,
 	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { capHistory, fitBranch } from "./btw-budget.js";
+import { type CappedHistory, capHistory, type FitBranchResult, fitBranch } from "./btw-budget.js";
 import { showBtwOverlay } from "./btw-ui.js";
 import { loadCompleteSimple, loadIsContextOverflow } from "./pi-compat.js";
 
@@ -49,10 +49,10 @@ const errNoApiKey = (label: string) => `/btw model (${label}) has no API key ava
 const errCallFailed = (err: string | undefined) => `/btw call failed: ${err ?? "unknown error"}`;
 const errCallThrew = (msg: string) => `/btw call threw: ${msg}`;
 
-// Budget (context-budgeting) constants.
-export const BTW_HISTORY_TOKEN_BUDGET = 8192; // cap /btw history (newest-suffix of BtwTurn[])
-export const BTW_CONTEXT_RESERVE = 16384; // matches host DEFAULT_COMPACTION_SETTINGS.reserveTokens
-export const BTW_NO_ANCHOR_SAFETY_FACTOR = 1.2; // no-anchor fallback overcount, applied HERE (host does not)
+// Budget (context-budgeting) constants — defined in btw-budget.ts (the leaf budget
+// module; keeps the module cycle type-only at runtime), re-exported here so the
+// package surface is unchanged.
+export { BTW_CONTEXT_RESERVE, BTW_HISTORY_TOKEN_BUDGET, BTW_NO_ANCHOR_SAFETY_FACTOR } from "./btw-budget.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -213,18 +213,35 @@ export function buildBtwMessages(
 ): BtwBuiltContext {
 	// ctx.model is non-null here — executeBtw returns early on !model before calling.
 	const model = ctx.model!;
-	const capped = capHistory(getSessionHistory(ctx));
+	const history = getSessionHistory(ctx);
 	const { messages, entries } = readBranchSnapshot(ctx);
 	const systemPrompt = buildSystemPrompt();
-	const fit = fitBranch({
-		entries,
-		messages,
-		model,
-		systemPrompt,
-		question: userMessage,
-		admittedEstimate: capped.estimate,
-		keepBudget,
-	});
+	const fitInput = { entries, messages, model, systemPrompt, question: userMessage };
+
+	let capped: CappedHistory;
+	let fit: FitBranchResult;
+	if (keepBudget === undefined) {
+		// Fast-path parity: attempt the FULL history first (an Infinity budget admits
+		// every turn) — when the whole request fits the window, the build is
+		// byte-identical to the pre-budgeting assembly and the history cap never engages.
+		capped = capHistory(history, Number.POSITIVE_INFINITY);
+		fit = fitBranch({ ...fitInput, admittedEstimate: capped.estimate });
+		if (fit.branchWasTrimmed || fit.stubbed) {
+			// Over budget with full history → apply the history cap BEFORE branch
+			// trimming, then re-fit the branch against the freed window. When the cap
+			// drops nothing the inputs are identical — keep the first fit.
+			const recapped = capHistory(history);
+			if (recapped.droppedTurns > 0) {
+				capped = recapped;
+				fit = fitBranch({ ...fitInput, admittedEstimate: recapped.estimate });
+			}
+		}
+	} else {
+		// Overflow retry: the sent request has already proven too large — take the
+		// capped history and trim/stub the branch straight to the halved budget.
+		capped = capHistory(history);
+		fit = fitBranch({ ...fitInput, admittedEstimate: capped.estimate, keepBudget });
+	}
 	const assembled: Message[] = [
 		...fit.messages,
 		...capped.admitted.flatMap((t) => [t.userMessage, t.assistantMessage]),
