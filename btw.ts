@@ -18,6 +18,7 @@ import {
 	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { type CappedHistory, capHistory, type FitBranchResult, fitBranch } from "./btw-budget.js";
+import { assistantMessageText, type BtwTurn, userMessageText } from "./btw-messages.js";
 import { showBtwOverlay } from "./btw-ui.js";
 import { loadCompleteSimple, loadIsContextOverflow } from "./pi-compat.js";
 
@@ -53,18 +54,17 @@ const errCallThrew = (msg: string) => `/btw call threw: ${msg}`;
 // module; keeps the module cycle type-only at runtime), re-exported here so the
 // package surface is unchanged.
 export { BTW_CONTEXT_RESERVE, BTW_HISTORY_TOKEN_BUDGET, BTW_NO_ANCHOR_SAFETY_FACTOR } from "./btw-budget.js";
+// BtwTurn + the message-text extractors live in the cycle-break leaf
+// (packages/rpiv-btw/btw-messages.ts); re-exported here so the package surface is
+// unchanged (packages/rpiv-btw/btw.test.ts / btw-ui.test.ts / btw-budget.test.ts still
+// import them from "./btw.js"). Import-then-re-export (not `export … from`) because
+// btw.ts consumes all three internally (userMessageText at :166,
+// assistantMessageText at :341, BtwTurn in BtwState/getSessionHistory/pushSessionTurn).
+export { assistantMessageText, type BtwTurn, userMessageText };
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-// Real messages — no fabrication. userMessage is built at call time; assistantMessage
-// is the unmodified completeSimple response. Stable object references across calls →
-// byte-identical prompt prefix on subsequent /btw invocations (cache parity).
-export interface BtwTurn {
-	userMessage: UserMessage;
-	assistantMessage: AssistantMessage;
-}
 
 interface BtwState {
 	histories: Map<string, BtwTurn[]>;
@@ -141,23 +141,6 @@ export function invalidateSnapshot(ctx: ExtensionContext): void {
 	getState().snapshots.delete(getSessionFile(ctx));
 }
 
-// Extract text from a UserMessage's content.
-export function userMessageText(msg: UserMessage): string {
-	if (typeof msg.content === "string") return msg.content;
-	return msg.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map((c) => c.text)
-		.join("\n");
-}
-
-// Extract text from an AssistantMessage's content (text parts only).
-export function assistantMessageText(msg: AssistantMessage): string {
-	return msg.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map((c) => c.text)
-		.join("\n");
-}
-
 // Cross-session pattern hint — last N question-strings across ALL sessions.
 function getCrossSessionHint(): string {
 	const allTurns: { q: string; ts: number }[] = [];
@@ -179,15 +162,15 @@ function getCrossSessionHint(): string {
 
 export type BtwExecResult =
 	| {
-			ok: true;
+			kind: "success";
 			answer: string;
 			userMessage: UserMessage;
 			assistantMessage: AssistantMessage;
 			stopReason: StopReason;
 			trimmed?: boolean;
 	  }
-	| { ok: false; error: string; stopReason?: StopReason }
-	| { ok: false; aborted: true; stopReason: StopReason };
+	| { kind: "error"; error: string; stopReason?: StopReason }
+	| { kind: "aborted"; stopReason: StopReason };
 
 function readBranchSnapshot(ctx: ExtensionContext): { messages: Message[]; entries: SessionEntry[] } {
 	const cached = getSnapshot(ctx);
@@ -268,16 +251,16 @@ export async function executeBtw(
 ): Promise<BtwExecResult> {
 	const model = ctx.model;
 	if (!model) {
-		return { ok: false, error: MSG_NO_MODEL };
+		return { kind: "error", error: MSG_NO_MODEL };
 	}
 	const modelLabel = `${model.provider}:${model.id}`;
 
 	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
 	if (!auth.ok) {
-		return { ok: false, error: errMisconfigured(modelLabel, auth.error) };
+		return { kind: "error", error: errMisconfigured(modelLabel, auth.error) };
 	}
 	if (!auth.apiKey) {
-		return { ok: false, error: errNoApiKey(modelLabel) };
+		return { kind: "error", error: errNoApiKey(modelLabel) };
 	}
 
 	const userMessage: UserMessage = {
@@ -294,19 +277,26 @@ export async function executeBtw(
 		const completeSimple = await loadCompleteSimple();
 		const overflowFn = await loadIsContextOverflow();
 		let retried = false;
-		let response = await completeSimple(
-			model,
-			{ systemPrompt: built.systemPrompt, messages: built.messages, tools: [] },
-			{
-				apiKey: auth.apiKey,
-				headers: auth.headers,
-				signal: controller.signal, // own AbortController, NOT ctx.signal (Decision 8)
-			},
-		);
-
-		if (response.stopReason === "aborted") {
-			return { ok: false, aborted: true, stopReason: response.stopReason };
-		}
+		const callCompleteSimple = async (
+			built: BtwBuiltContext,
+		): Promise<{ kind: "aborted"; stopReason: StopReason } | { kind: "completed"; response: AssistantMessage }> => {
+			const response = await completeSimple(
+				model,
+				{ systemPrompt: built.systemPrompt, messages: built.messages, tools: [] },
+				{
+					apiKey: auth.apiKey,
+					headers: auth.headers,
+					signal: controller.signal, // own AbortController, NOT ctx.signal (Decision 8)
+				},
+			);
+			if (response.stopReason === "aborted") {
+				return { kind: "aborted", stopReason: response.stopReason };
+			}
+			return { kind: "completed", response };
+		};
+		let outcome = await callCompleteSimple(built);
+		if (outcome.kind === "aborted") return outcome;
+		let response = outcome.response;
 		// Overflow gate — exactly one retry. On the first response the host flags
 		// as context overflow (any stopReason), rebuild the branch context with a
 		// halved keepBudget and re-call once. A flag bounds it to one retry; the
@@ -317,22 +307,13 @@ export async function executeBtw(
 		if (overflowFn && !retried && overflowFn(response, model.contextWindow)) {
 			retried = true;
 			built = buildBtwMessages(ctx, userMessage, Math.floor(built.keepBudget / 2));
-			response = await completeSimple(
-				model,
-				{ systemPrompt: built.systemPrompt, messages: built.messages, tools: [] },
-				{
-					apiKey: auth.apiKey,
-					headers: auth.headers,
-					signal: controller.signal,
-				},
-			);
-			if (response.stopReason === "aborted") {
-				return { ok: false, aborted: true, stopReason: response.stopReason };
-			}
+			outcome = await callCompleteSimple(built);
+			if (outcome.kind === "aborted") return outcome;
+			response = outcome.response;
 		}
 		if (response.stopReason === "error") {
 			return {
-				ok: false,
+				kind: "error",
 				error: errCallFailed(response.errorMessage),
 				stopReason: response.stopReason,
 			};
@@ -340,11 +321,11 @@ export async function executeBtw(
 
 		const answerText = assistantMessageText(response).trim();
 		if (!answerText) {
-			return { ok: false, error: ERR_EMPTY_RESPONSE, stopReason: response.stopReason };
+			return { kind: "error", error: ERR_EMPTY_RESPONSE, stopReason: response.stopReason };
 		}
 
 		return {
-			ok: true,
+			kind: "success",
 			answer: answerText,
 			userMessage,
 			assistantMessage: response,
@@ -354,9 +335,9 @@ export async function executeBtw(
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (controller.signal.aborted) {
-			return { ok: false, aborted: true, stopReason: "aborted" as const };
+			return { kind: "aborted", stopReason: "aborted" as const };
 		}
-		return { ok: false, error: errCallThrew(message) };
+		return { kind: "error", error: errCallThrew(message) };
 	}
 }
 
@@ -434,18 +415,25 @@ async function handleBtwCommand(_pi: ExtensionAPI, args: string, ctx: ExtensionC
 	const overlayCtl = await controllerReady;
 	const result = await executeBtw(question, ctx, controller);
 
-	if (result.ok) {
-		overlayCtl.setAnswer(result.answer);
-		if (result.trimmed) overlayCtl.setTrimmed();
-		pushSessionTurn(ctx, {
-			userMessage: result.userMessage,
-			assistantMessage: result.assistantMessage,
-		});
-		// No disk persistence — process-scoped only (Decision 4)
-	} else if ("aborted" in result) {
-		// User Esc'd — overlay already dismissed via done(); no further action
-	} else {
-		overlayCtl.setError(result.error);
+	switch (result.kind) {
+		case "success": {
+			overlayCtl.setAnswer(result.answer);
+			if (result.trimmed) overlayCtl.setTrimmed(); // success-only: TS narrows result here
+			pushSessionTurn(ctx, {
+				userMessage: result.userMessage,
+				assistantMessage: result.assistantMessage,
+			});
+			// No disk persistence — process-scoped only (Decision 4)
+			break;
+		}
+		case "aborted": {
+			// User Esc'd — overlay already dismissed via done(); no further action
+			break;
+		}
+		case "error": {
+			overlayCtl.setError(result.error);
+			break;
+		}
 	}
 
 	await overlayPromise;

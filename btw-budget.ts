@@ -225,14 +225,13 @@ function trimBranch(entries: SessionEntry[], keepRecentTokens: number): { messag
 	return { messages: trimmed };
 }
 
-/** Oversized-turn stubbing + terminal truncation. Operates on a SHALLOW copy
- *  (`messages.slice()`) and replaces slots via object spread — the cached snapshot's array
- *  AND its message objects are never mutated. Re-estimates after each step; the loops
- *  terminate (finite tool-result set; finite total text chars). */
-function stubToFit(messages: Message[], budget: number): { messages: Message[]; stubbed: boolean } {
-	const result = messages.slice(); // shallow: new array, shared message objects
+/** Phase 1 of {@link stubToFit}: oldest-first toolResult stubbing. Operates in-place
+ *  on `result` (does NOT copy) — re-estimates before each slot via the termination guard
+ *  and replaces over-budget `msg.role === "toolResult"` slots with the placeholder,
+ *  preserving toolCallId/toolName/isError via spread (the paired ToolCall in the prior
+ *  assistant stays). Returns `true` iff at least one slot was stubbed. */
+function stubToolResultsToFit(result: Message[], budget: number): boolean {
 	let stubbed = false;
-
 	// Stub toolResult content oldest-first with the placeholder (preserves
 	// toolCallId/toolName/isError via spread; the paired ToolCall in the prior assistant stays).
 	for (let i = 0; i < result.length; i++) {
@@ -243,7 +242,17 @@ function stubToFit(messages: Message[], budget: number): { messages: Message[]; 
 			stubbed = true;
 		}
 	}
+	return stubbed;
+}
 
+/** Phase 2 of {@link stubToFit}: terminal truncation toward the token gap. Operates in-place
+ *  on `result` (does NOT copy). One block per iteration, re-estimated each pass; a pass that
+ *  fails to shrink the estimate breaks the loop — the truncation marker keeps every rewritten
+ *  block at a floor length, so a budget below that floor (e.g. negative) would otherwise
+ *  rewrite the same block forever; `priorEstimate` is seeded at +∞ so the first pass always
+ *  proceeds. Returns `true` iff at least one block was truncated. */
+function truncateToFit(result: Message[], budget: number): boolean {
+	let stubbed = false;
 	// Terminal fallback: truncate the largest text block toward the token gap
 	// (chars ≈ tokens×4, the inverse of estimateTokens' chars/4) with a marker. One block per
 	// iteration; re-estimate each pass. A pass that fails to shrink the estimate breaks the
@@ -316,8 +325,20 @@ function stubToFit(messages: Message[], budget: number): { messages: Message[]; 
 		}
 		stubbed = true;
 	}
+	return stubbed;
+}
 
-	return { messages: result, stubbed };
+/** Oversized-turn stubbing + terminal truncation. Operates on a SHALLOW copy
+ *  (`messages.slice()`) — the copy lives HERE, in one place, and guards both phases —
+ *  and replaces slots via object spread so the cached snapshot's array AND its message
+ *  objects are never mutated. Phase 1 ({@link stubToolResultsToFit}) stubs toolResults
+ *  oldest-first; phase 2 ({@link truncateToFit}) truncates the largest text block toward
+ *  the token gap. Signature and return shape are unchanged. */
+function stubToFit(messages: Message[], budget: number): { messages: Message[]; stubbed: boolean } {
+	const result = messages.slice(); // shallow: new array, shared message objects — one place, guards both phases
+	const stubbedTool = stubToolResultsToFit(result, budget);
+	const stubbedTruncated = truncateToFit(result, budget);
+	return { messages: result, stubbed: stubbedTool || stubbedTruncated };
 }
 
 /** Orchestrating pure branch-fit. Fast path returns the cached `messages` by reference

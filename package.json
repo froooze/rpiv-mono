@@ -32,6 +32,7 @@
     "index.ts",
     "btw.ts",
     "btw-budget.ts",
+    "btw-messages.ts",
     "btw-ui.ts",
     "pi-compat.ts",
     "prompts/",

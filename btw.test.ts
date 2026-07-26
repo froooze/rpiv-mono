@@ -171,8 +171,8 @@ describe("executeBtw — ok path", () => {
 		ctx.model = { provider: "a", id: "m" } as never;
 		vi.mocked(completeSimple).mockResolvedValueOnce(makeCompletionResponse({ text: "answer text" }) as never);
 		const r = await executeBtw("question", ctx, new AbortController());
-		expect(r.ok).toBe(true);
-		if (!r.ok) throw new Error("unexpected");
+		expect(r.kind).toBe("success");
+		if (r.kind !== "success") throw new Error("unexpected");
 		expect(r.answer).toBe("answer text");
 		expect(r.userMessage.content).toEqual([{ type: "text", text: "question" }]);
 		expect(r.assistantMessage).toBeDefined();
@@ -184,7 +184,7 @@ describe("executeBtw — error branches", () => {
 		const ctx = createMockCtx();
 		ctx.model = undefined;
 		const r = await executeBtw("q", ctx, new AbortController());
-		expect(r).toMatchObject({ ok: false, error: "/btw requires an active model" });
+		expect(r).toMatchObject({ kind: "error", error: "/btw requires an active model" });
 	});
 	it("returns error when getApiKeyAndHeaders is not ok", async () => {
 		const ctx = createMockCtx();
@@ -194,8 +194,8 @@ describe("executeBtw — error branches", () => {
 			getApiKeyAndHeaders: vi.fn(async () => ({ ok: false, error: "bad creds" })),
 		} as never;
 		const r = await executeBtw("q", ctx, new AbortController());
-		expect(r.ok).toBe(false);
-		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.kind).toBe("error");
+		if (r.kind !== "error") throw new Error("unexpected");
 		expect(r.error).toContain("misconfigured");
 		expect(r.error).toContain("bad creds");
 	});
@@ -207,8 +207,8 @@ describe("executeBtw — error branches", () => {
 			getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "", headers: {} })),
 		} as never;
 		const r = await executeBtw("q", ctx, new AbortController());
-		expect(r.ok).toBe(false);
-		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.kind).toBe("error");
+		if (r.kind !== "error") throw new Error("unexpected");
 		expect(r.error).toContain("no API key");
 	});
 	it("returns aborted when stopReason=aborted", async () => {
@@ -216,7 +216,7 @@ describe("executeBtw — error branches", () => {
 		ctx.model = { provider: "a", id: "m" } as never;
 		vi.mocked(completeSimple).mockResolvedValueOnce(makeCompletionResponse({ stopReason: "aborted" }) as never);
 		const r = await executeBtw("q", ctx, new AbortController());
-		expect(r).toMatchObject({ ok: false, aborted: true });
+		expect(r).toMatchObject({ kind: "aborted" });
 	});
 	it("returns error when stopReason=error", async () => {
 		const ctx = createMockCtx();
@@ -225,8 +225,8 @@ describe("executeBtw — error branches", () => {
 			makeCompletionResponse({ stopReason: "error", errorMessage: "remote 500" }) as never,
 		);
 		const r = await executeBtw("q", ctx, new AbortController());
-		expect(r.ok).toBe(false);
-		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.kind).toBe("error");
+		if (r.kind !== "error") throw new Error("unexpected");
 		expect(r.error).toContain("remote 500");
 	});
 	it("returns error when response has no text content", async () => {
@@ -234,8 +234,8 @@ describe("executeBtw — error branches", () => {
 		ctx.model = { provider: "a", id: "m" } as never;
 		vi.mocked(completeSimple).mockResolvedValueOnce(makeCompletionResponse({ stopReason: "done" }) as never);
 		const r = await executeBtw("q", ctx, new AbortController());
-		expect(r.ok).toBe(false);
-		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.kind).toBe("error");
+		if (r.kind !== "error") throw new Error("unexpected");
 		expect(r.error).toContain("no text content");
 	});
 	it("translates controller.signal.aborted on thrown error to aborted=true", async () => {
@@ -245,15 +245,15 @@ describe("executeBtw — error branches", () => {
 		controller.abort();
 		vi.mocked(completeSimple).mockRejectedValueOnce(new Error("abort"));
 		const r = await executeBtw("q", ctx, controller);
-		expect(r).toMatchObject({ ok: false, aborted: true });
+		expect(r).toMatchObject({ kind: "aborted" });
 	});
 	it("wraps unknown throws as errCallThrew", async () => {
 		const ctx = createMockCtx();
 		ctx.model = { provider: "a", id: "m" } as never;
 		vi.mocked(completeSimple).mockRejectedValueOnce(new Error("boom"));
 		const r = await executeBtw("q", ctx, new AbortController());
-		expect(r.ok).toBe(false);
-		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.kind).toBe("error");
+		if (r.kind !== "error") throw new Error("unexpected");
 		expect(r.error).toContain("call threw");
 		expect(r.error).toContain("boom");
 	});
@@ -379,8 +379,8 @@ describe("executeBtw — overflow retry", () => {
 
 		const r = await executeBtw("q", ctx, new AbortController());
 
-		expect(r.ok).toBe(true);
-		if (!r.ok) throw new Error("unexpected");
+		expect(r.kind).toBe("success");
+		if (r.kind !== "success") throw new Error("unexpected");
 		expect(r.answer).toBe("retry answer");
 		expect(completeSimple).toHaveBeenCalledTimes(2);
 		// The retry rebuilt the context: the second call received a freshly built
@@ -398,7 +398,7 @@ describe("executeBtw — overflow retry", () => {
 
 		const r = await executeBtw("q", ctx, new AbortController());
 
-		expect(r).toMatchObject({ ok: false, aborted: true });
+		expect(r).toMatchObject({ kind: "aborted" });
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 		expect(overflowFn).not.toHaveBeenCalled();
 	});
@@ -415,7 +415,7 @@ describe("executeBtw — overflow retry", () => {
 
 		const r = await executeBtw("q", ctx, new AbortController());
 
-		expect(r).toMatchObject({ ok: false, aborted: true });
+		expect(r).toMatchObject({ kind: "aborted" });
 		expect(completeSimple).toHaveBeenCalledTimes(2);
 	});
 
@@ -433,8 +433,8 @@ describe("executeBtw — overflow retry", () => {
 
 		const r = await executeBtw("q", ctx, new AbortController());
 
-		expect(r.ok).toBe(false);
-		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.kind).toBe("error");
+		if (r.kind !== "error") throw new Error("unexpected");
 		expect(r.error).toContain("call failed");
 		expect(completeSimple).toHaveBeenCalledTimes(2);
 	});
@@ -449,8 +449,8 @@ describe("executeBtw — overflow retry", () => {
 
 		const r = await executeBtw("q", ctx, new AbortController());
 
-		expect(r.ok).toBe(false);
-		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.kind).toBe("error");
+		if (r.kind !== "error") throw new Error("unexpected");
 		expect(r.error).toContain("remote 500");
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 	});
@@ -466,8 +466,8 @@ describe("executeBtw — overflow retry", () => {
 
 		const r = await executeBtw("q", ctx, new AbortController());
 
-		expect(r.ok).toBe(false);
-		if (r.ok || "aborted" in r) throw new Error("unexpected");
+		expect(r.kind).toBe("error");
+		if (r.kind !== "error") throw new Error("unexpected");
 		expect(r.error).toContain("call failed");
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 	});
